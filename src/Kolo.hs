@@ -6,6 +6,8 @@ module Kolo
     , serve
     ) where
 
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as C8
 import qualified Data.Conduit as C
 import qualified Data.Conduit.Network as CN
 import qualified Data.Conduit.Network.TLS as TLS
@@ -31,8 +33,17 @@ newServer = Server
 bufferSize :: Int
 bufferSize = 4096
 
+echoConduit :: C.Conduit BS.ByteString IO BS.ByteString
+echoConduit = do
+  input <- C.await
+  case input of
+    Nothing -> return ()
+    Just val -> do
+      C.yield (BS.append (C8.pack "You said: ") val)
+      echoConduit
+
 echoListener :: CN.AppData -> IO ()
-echoListener a = CN.appSource a C.$$ CN.appSink a
+echoListener a = CN.appSource a C.=$= echoConduit C.$$ CN.appSink a
 
 serve :: Server -> IO ()
 serve (Server (ServerConfig host port crt key)) = do
