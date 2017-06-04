@@ -31,7 +31,7 @@ data ServerConfig = ServerConfig
 
 data ServerState = ServerState
   { config :: ServerConfig
-  , users :: [(TC.TChan BS.ByteString, CC.ThreadId)]
+  , users :: [(UUID.UUID, (TC.TChan BS.ByteString, CC.ThreadId))]
   }
 
 type Server = MV.MVar ServerState
@@ -42,10 +42,10 @@ defaultConfig = ServerConfig "*" 7779 "server.crt" "server.key"
 newServer :: ServerConfig -> IO Server
 newServer cfg = MV.newMVar (ServerState cfg [])
 
-addUser :: Server -> TC.TChan BS.ByteString -> CC.ThreadId -> IO ()
-addUser s chan tid = do
+addUser :: Server -> UUID.UUID -> TC.TChan BS.ByteString -> CC.ThreadId -> IO ()
+addUser s uuid chan tid = do
   MV.modifyMVar_ s $ (\ss -> do
-      return ss { users = (chan, tid) : users ss }
+      return ss { users = (uuid, (chan, tid)) : users ss }
     )
 
 echoConduit :: C.Conduit BS.ByteString IO BS.ByteString
@@ -97,7 +97,7 @@ runListener s a = do
     chan <- newUserChan
     tid <- runUserThread chan sink
     uuid <- UUID4.nextRandom
-    addUser s chan tid
+    addUser s uuid chan tid
     writeUserChan chan (serverWelcome (UUID.toASCIIBytes uuid))
     listen source chan
   where
