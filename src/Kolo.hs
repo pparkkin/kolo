@@ -48,15 +48,6 @@ addUser s uuid chan tid = do
       return ss { users = (uuid, (chan, tid)) : users ss }
     )
 
-echoConduit :: C.Conduit BS.ByteString IO BS.ByteString
-echoConduit = do
-  input <- C.await
-  case input of
-    Nothing -> return ()
-    Just val -> do
-      C.yield (BS.append (C8.pack "You said: ") val)
-      echoConduit
-
 newUserChan :: IO (TC.TChan BS.ByteString)
 newUserChan = atomically $ TC.newTChan
 
