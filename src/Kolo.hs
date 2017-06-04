@@ -36,9 +36,6 @@ defaultConfig = ServerConfig "*" 7779 "server.crt" "server.key"
 newServer :: ServerConfig -> Server
 newServer = Server
 
-bufferSize :: Int
-bufferSize = 4096
-
 echoConduit :: C.Conduit BS.ByteString IO BS.ByteString
 echoConduit = do
   input <- C.await
