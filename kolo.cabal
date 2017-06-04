@@ -23,6 +23,8 @@ library
                      , conduit-extra
                      , conduit
                      , bytestring
+                     , stm
+                     , transformers
   default-language:    Haskell2010
 
 executable kolo-exe
