@@ -8,6 +8,7 @@ module Kolo
     ) where
 
 import qualified Control.Concurrent as CC
+import qualified Control.Concurrent.MVar as MV
 import qualified Control.Concurrent.STM.TChan as TC
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
@@ -26,15 +27,17 @@ data ServerConfig = ServerConfig
   , key :: FilePath
   }
 
-data Server = Server
+data ServerState = ServerState
   { config :: ServerConfig
   }
+
+type Server = MV.MVar ServerState
 
 defaultConfig :: ServerConfig
 defaultConfig = ServerConfig "*" 7779 "server.crt" "server.key"
 
-newServer :: ServerConfig -> Server
-newServer = Server
+newServer :: ServerConfig -> IO Server
+newServer cfg = MV.newMVar (ServerState cfg)
 
 echoConduit :: C.Conduit BS.ByteString IO BS.ByteString
 echoConduit = do
@@ -82,6 +85,7 @@ runListener a = do
     sink = CN.appSink a
 
 serve :: Server -> IO ()
-serve (Server (ServerConfig host port crt key)) = do
+serve s = do
+  (ServerState (ServerConfig host port crt key)) <- MV.takeMVar s
   let c = TLS.tlsConfig host port crt key
   TLS.runTCPServerTLS c runListener

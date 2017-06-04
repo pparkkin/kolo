@@ -4,5 +4,5 @@ import Kolo
 
 main :: IO ()
 main = do
-  let s = newServer defaultConfig
+  s <- newServer defaultConfig
   serve s
