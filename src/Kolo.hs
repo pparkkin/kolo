@@ -15,6 +15,8 @@ import qualified Data.ByteString.Char8 as C8
 import qualified Data.Conduit as C
 import qualified Data.Conduit.Network as CN
 import qualified Data.Conduit.Network.TLS as TLS
+import qualified Data.UUID as UUID
+import qualified Data.UUID.V4 as UUID4
 import qualified Network.Simple.TCP as NS
 
 import Control.Monad.IO.Class ( liftIO )
@@ -82,11 +84,21 @@ chanReader chan = do
 listen :: C.Producer IO BS.ByteString -> TC.TChan BS.ByteString -> IO ()
 listen source chan = C.connect source (chanWriter chan)
 
+serverWelcome :: BS.ByteString -> BS.ByteString
+serverWelcome user =
+  foldr BS.append BS.empty
+    [ C8.pack "Welcome, "
+    , user
+    , C8.pack "!\n"
+    ]
+
 runListener :: Server -> CN.AppData -> IO ()
 runListener s a = do
     chan <- newUserChan
     tid <- runUserThread chan sink
+    uuid <- UUID4.nextRandom
     addUser s chan tid
+    writeUserChan chan (serverWelcome (UUID.toASCIIBytes uuid))
     listen source chan
   where
     source = CN.appSource a
