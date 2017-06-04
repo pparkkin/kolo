@@ -29,6 +29,7 @@ data ServerConfig = ServerConfig
 
 data ServerState = ServerState
   { config :: ServerConfig
+  , users :: [(TC.TChan BS.ByteString, CC.ThreadId)]
   }
 
 type Server = MV.MVar ServerState
@@ -37,7 +38,13 @@ defaultConfig :: ServerConfig
 defaultConfig = ServerConfig "*" 7779 "server.crt" "server.key"
 
 newServer :: ServerConfig -> IO Server
-newServer cfg = MV.newMVar (ServerState cfg)
+newServer cfg = MV.newMVar (ServerState cfg [])
+
+addUser :: Server -> TC.TChan BS.ByteString -> CC.ThreadId -> IO ()
+addUser s chan tid = do
+  MV.modifyMVar_ s $ (\ss -> do
+      return ss { users = (chan, tid) : users ss }
+    )
 
 echoConduit :: C.Conduit BS.ByteString IO BS.ByteString
 echoConduit = do
@@ -75,10 +82,11 @@ chanReader chan = do
 listen :: C.Producer IO BS.ByteString -> TC.TChan BS.ByteString -> IO ()
 listen source chan = C.connect source (chanWriter chan)
 
-runListener :: CN.AppData -> IO ()
-runListener a = do
+runListener :: Server -> CN.AppData -> IO ()
+runListener s a = do
     chan <- newUserChan
-    _ <- runUserThread chan sink
+    tid <- runUserThread chan sink
+    addUser s chan tid
     listen source chan
   where
     source = CN.appSource a
@@ -86,6 +94,6 @@ runListener a = do
 
 serve :: Server -> IO ()
 serve s = do
-  (ServerState (ServerConfig host port crt key)) <- MV.takeMVar s
+  (ServerState (ServerConfig host port crt key) _) <- MV.readMVar s
   let c = TLS.tlsConfig host port crt key
-  TLS.runTCPServerTLS c runListener
+  TLS.runTCPServerTLS c (runListener s)
