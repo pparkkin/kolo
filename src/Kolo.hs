@@ -13,6 +13,7 @@ import qualified Control.Concurrent.STM.TChan as TC
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.Conduit as C
+import qualified Data.Conduit.Combinators as CCo
 import qualified Data.Conduit.Network as CN
 import qualified Data.Conduit.Network.TLS as TLS
 import qualified Data.UUID as UUID
@@ -54,23 +55,17 @@ newUserChan = atomically $ TC.newTChan
 writeUserChan :: TC.TChan BS.ByteString -> BS.ByteString -> IO ()
 writeUserChan chan v = atomically $ TC.writeTChan chan v
 
+readUserChan :: TC.TChan BS.ByteString -> IO BS.ByteString
+readUserChan chan = atomically $ TC.readTChan chan
+
 runUserThread :: TC.TChan BS.ByteString -> C.Consumer BS.ByteString IO () -> IO CC.ThreadId
 runUserThread chan sink = CC.forkIO $ C.connect (chanReader chan) sink
 
 chanWriter :: TC.TChan BS.ByteString -> C.Consumer BS.ByteString IO ()
-chanWriter chan = do
-  maybeVal <- C.await
-  case maybeVal of
-    Nothing -> return ()
-    Just val -> do
-      liftIO (writeUserChan chan val)
-      chanWriter chan
+chanWriter chan = CCo.mapM_ (writeUserChan chan)
 
 chanReader :: TC.TChan BS.ByteString -> C.Producer IO BS.ByteString
-chanReader chan = do
-  val <- liftIO $ atomically $ TC.readTChan chan
-  C.yield val
-  chanReader chan
+chanReader chan = CCo.repeatM (readUserChan chan)
 
 listen :: C.Producer IO BS.ByteString -> TC.TChan BS.ByteString -> IO ()
 listen source chan = C.connect source (chanWriter chan)

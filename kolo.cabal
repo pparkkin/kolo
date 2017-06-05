@@ -26,6 +26,8 @@ library
                      , stm
                      , transformers
                      , uuid
+                     , irc-conduit
+                     , conduit-combinators
   default-language:    Haskell2010
 
 executable kolo-exe
