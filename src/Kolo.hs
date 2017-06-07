@@ -21,15 +21,23 @@ import qualified Data.UUID as UUID
 import qualified Data.UUID.V4 as UUID4
 import qualified Network.IRC.Conduit as IRCC
 import qualified Network.Simple.TCP as NS
+import qualified System.Log.Logger as Logger
 
 import Control.Monad.IO.Class ( liftIO )
 import Control.Monad.STM ( atomically )
+import Data.List ( intercalate )
+import System.Log.Logger ( debugM
+                         , infoM
+                         , warningM
+                         , errorM
+                         )
 
 data ServerConfig = ServerConfig
   { host :: CN.HostPreference
   , port :: Int
   , cert :: FilePath
   , key :: FilePath
+  , logLevel :: Logger.Priority
   }
 
 data ServerState = ServerState
@@ -39,8 +47,11 @@ data ServerState = ServerState
 
 type Server = MV.MVar ServerState
 
+serverLogger :: String
+serverLogger = "server"
+
 defaultConfig :: ServerConfig
-defaultConfig = ServerConfig "*" 7779 "server.crt" "server.key"
+defaultConfig = ServerConfig "*" 7779 "server.crt" "server.key" Logger.DEBUG
 
 newServer :: ServerConfig -> IO Server
 newServer cfg = MV.newMVar (ServerState cfg [])
@@ -73,11 +84,22 @@ extractMessage :: Either BS.ByteString IRCC.IrcEvent -> IRCC.IrcMessage
 extractMessage (Left e) = IRCC.RawMsg (BS.append (C8.pack "unrecognized ") e)
 extractMessage (Right e) = L.view IRCC.message e
 
+inputByteStringLogger :: BS.ByteString -> IO ()
+inputByteStringLogger bs = do
+    debugM serverLogger (intercalate "\n" ls)
+  where
+    ls = [ "Received data"
+         , C8.unpack bs
+         ]
+
+sourceLogger :: C.Conduit BS.ByteString IO BS.ByteString
+sourceLogger = CCo.iterM inputByteStringLogger
+
 ircEventHandler :: C.Conduit (Either BS.ByteString IRCC.IrcEvent) IO IRCC.IrcMessage
 ircEventHandler = CCo.map extractMessage
 
 listen :: C.Producer IO BS.ByteString -> TC.TChan IRCC.IrcMessage -> IO ()
-listen source chan = source C.=$= IRCC.ircDecoder C.=$= ircEventHandler C.$$ (chanWriter chan)
+listen source chan = source C.=$= sourceLogger C.=$= IRCC.ircDecoder C.=$= ircEventHandler C.$$ (chanWriter chan)
 
 serverWelcome :: BS.ByteString -> IRCC.IrcMessage
 serverWelcome user =
@@ -90,9 +112,10 @@ serverWelcome user =
 
 runListener :: Server -> CN.AppData -> IO ()
 runListener s a = do
+    infoM serverLogger ("New connection from " ++ (show (CN.appSockAddr a)))
+    uuid <- UUID4.nextRandom
     chan <- newUserChan
     tid <- runUserThread chan sink
-    uuid <- UUID4.nextRandom
     addUser s uuid chan tid
     writeUserChan chan (serverWelcome (UUID.toASCIIBytes uuid))
     listen source chan
@@ -100,8 +123,14 @@ runListener s a = do
     source = CN.appSource a
     sink = CN.appSink a
 
+configureLogger :: Logger.Priority -> IO ()
+configureLogger logLevel = do
+  Logger.updateGlobalLogger serverLogger (Logger.setLevel logLevel)
+
 serve :: Server -> IO ()
 serve s = do
-  (ServerState (ServerConfig host port crt key) _) <- MV.readMVar s
+  (ServerState (ServerConfig host port crt key logLevel) _) <- MV.readMVar s
   let c = TLS.tlsConfig host port crt key
+  configureLogger logLevel
+  infoM serverLogger ("Listening on port " ++ (show port))
   TLS.runTCPServerTLS c (runListener s)
