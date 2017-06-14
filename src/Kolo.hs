@@ -84,22 +84,29 @@ extractMessage :: Either BS.ByteString IRCC.IrcEvent -> IRCC.IrcMessage
 extractMessage (Left e) = IRCC.RawMsg (BS.append (C8.pack "unrecognized ") e)
 extractMessage (Right e) = L.view IRCC.message e
 
-inputByteStringLogger :: BS.ByteString -> IO ()
-inputByteStringLogger bs = do
-    debugM serverLogger (intercalate "\n" ls)
-  where
-    ls = [ "Received data"
-         , C8.unpack bs
-         ]
+logMessage :: Either BS.ByteString IRCC.IrcEvent -> IO ()
+logMessage (Left e) = debugM serverLogger ("Unable to decode " ++ C8.unpack e)
+logMessage (Right e) = debugM serverLogger ("Got " ++ (show e))
+
+logByteString :: String -> BS.ByteString -> IO ()
+logByteString msg bs = debugM serverLogger (msg ++ C8.unpack bs)
+
+ircEventHandler :: C.Consumer (Either BS.ByteString IRCC.IrcEvent) IO ()
+ircEventHandler = CCo.mapM_ logMessage
+
+sourcePreprocessor :: C.Conduit BS.ByteString IO BS.ByteString
+sourcePreprocessor = CCo.concatMap C8.lines
 
 sourceLogger :: C.Conduit BS.ByteString IO BS.ByteString
-sourceLogger = CCo.iterM inputByteStringLogger
-
-ircEventHandler :: C.Conduit (Either BS.ByteString IRCC.IrcEvent) IO IRCC.IrcMessage
-ircEventHandler = CCo.map extractMessage
+sourceLogger = CCo.iterM (logByteString "Received data\n")
 
 listen :: C.Producer IO BS.ByteString -> TC.TChan IRCC.IrcMessage -> IO ()
-listen source chan = source C.=$= sourceLogger C.=$= IRCC.ircDecoder C.=$= ircEventHandler C.$$ (chanWriter chan)
+listen source chan =
+  source
+    C.=$= sourceLogger
+--    C.=$= sourcePreprocessor
+    C.=$= IRCC.ircDecoder
+    C.$$ ircEventHandler
 
 serverWelcome :: BS.ByteString -> IRCC.IrcMessage
 serverWelcome user =
