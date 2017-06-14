@@ -26,3 +26,8 @@ stack exec kolo-server
 openssl s_client -quiet -connect localhost:7779
 ```
 
+## Connect from irssi
+
+```
+/connect -SSL localhost 7779
+```
