@@ -17,7 +17,7 @@ And answer all the questions. Just pressing enter to default everything works fi
 ## Run Server
 
 ```
-stack exec kolo-exe
+stack exec kolo-server
 ```
 
 ## Use OpenSSL Client to Connect
