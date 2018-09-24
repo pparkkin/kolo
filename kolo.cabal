@@ -26,6 +26,7 @@ library
                      , stm
                      , transformers
                      , uuid
+                     , irc
                      , irc-conduit
                      , conduit-combinators
                      , lens

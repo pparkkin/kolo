@@ -19,6 +19,7 @@ import qualified Data.Conduit.Network as CN
 import qualified Data.Conduit.Network.TLS as TLS
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V4 as UUID4
+import qualified Network.IRC as I
 import qualified Network.IRC.Conduit as IRCC
 import qualified Network.Simple.TCP as NS
 import qualified System.Log.Logger as Logger
@@ -42,7 +43,7 @@ data ServerConfig = ServerConfig
 
 data ServerState = ServerState
   { config :: ServerConfig
-  , users :: [(UUID.UUID, (TC.TChan IRCC.IrcMessage, CC.ThreadId))]
+  , users :: [(UUID.UUID, (TC.TChan I.Message, CC.ThreadId))]
   }
 
 type Server = MV.MVar ServerState
@@ -56,66 +57,71 @@ defaultConfig = ServerConfig "*" 7779 "server.crt" "server.key" Logger.DEBUG
 newServer :: ServerConfig -> IO Server
 newServer cfg = MV.newMVar (ServerState cfg [])
 
-addUser :: Server -> UUID.UUID -> TC.TChan IRCC.IrcMessage -> CC.ThreadId -> IO ()
+addUser :: Server -> UUID.UUID -> TC.TChan I.Message -> CC.ThreadId -> IO ()
 addUser s uuid chan tid = do
   MV.modifyMVar_ s $ (\ss -> do
       return ss { users = (uuid, (chan, tid)) : users ss }
     )
 
-newUserChan :: IO (TC.TChan IRCC.IrcMessage)
+newUserChan :: IO (TC.TChan I.Message)
 newUserChan = atomically $ TC.newTChan
 
-writeUserChan :: TC.TChan IRCC.IrcMessage -> IRCC.IrcMessage -> IO ()
+writeUserChan :: TC.TChan I.Message -> I.Message -> IO ()
 writeUserChan chan v = atomically $ TC.writeTChan chan v
 
-readUserChan :: TC.TChan IRCC.IrcMessage -> IO IRCC.IrcMessage
+readUserChan :: TC.TChan I.Message -> IO I.Message
 readUserChan chan = atomically $ TC.readTChan chan
 
-runUserThread :: TC.TChan IRCC.IrcMessage -> C.Consumer BS.ByteString IO () -> IO CC.ThreadId
-runUserThread chan sink = CC.forkIO $ (chanReader chan) C.=$= IRCC.ircEncoder C.$$ sink
+runUserThread :: TC.TChan I.Message -> C.Consumer BS.ByteString IO () -> IO CC.ThreadId
+runUserThread chan sink = CC.forkIO $ (chanReader chan) C.=$= IRCC.ircEncoderMessage C.$$ sink
 
-chanWriter :: TC.TChan IRCC.IrcMessage -> C.Consumer IRCC.IrcMessage IO ()
+chanWriter :: TC.TChan I.Message -> C.Consumer I.Message IO ()
 chanWriter chan = CCo.mapM_ (writeUserChan chan)
 
-chanReader :: TC.TChan IRCC.IrcMessage -> C.Producer IO IRCC.IrcMessage
+chanReader :: TC.TChan I.Message -> C.Producer IO I.Message
 chanReader chan = CCo.repeatM (readUserChan chan)
 
-extractMessage :: Either BS.ByteString IRCC.IrcEvent -> IRCC.IrcMessage
-extractMessage (Left e) = IRCC.RawMsg (BS.append (C8.pack "unrecognized ") e)
-extractMessage (Right e) = L.view IRCC.message e
-
-logMessage :: Either BS.ByteString IRCC.IrcEvent -> IO ()
+logMessage :: Either BS.ByteString I.Message -> IO ()
 logMessage (Left e) = debugM serverLogger ("Unable to decode " ++ C8.unpack e)
 logMessage (Right e) = debugM serverLogger ("Got " ++ (show e))
 
 logByteString :: String -> BS.ByteString -> IO ()
 logByteString msg bs = debugM serverLogger (msg ++ C8.unpack bs)
 
-ircEventHandler :: C.Consumer (Either BS.ByteString IRCC.IrcEvent) IO ()
-ircEventHandler = CCo.mapM_ logMessage
+-- remove newlines at the end of input data
+sanitizeData :: BS.ByteString -> BS.ByteString
+sanitizeData = head . C8.lines
+
+handleMessage' :: Either BS.ByteString I.Message -> IO ()
+handleMessage' (Left _) = debugM serverLogger "Ignoring raw byte string"
+handleMessage' (Right m) = handleMessage m
+
+handleMessage :: I.Message -> IO ()
+handleMessage (I.Message _ "CAP" _) = debugM serverLogger "IRCv3 client capability negotiation not supported"
+handleMessage m = debugM serverLogger ("Unsupported message " ++ (show m))
+
+ircEventHandler :: C.Consumer (Either BS.ByteString I.Message) IO ()
+ircEventHandler = CCo.mapM_ handleMessage'
 
 sourcePreprocessor :: C.Conduit BS.ByteString IO BS.ByteString
-sourcePreprocessor = CCo.concatMap C8.lines
+sourcePreprocessor = CCo.map sanitizeData
 
-sourceLogger :: C.Conduit BS.ByteString IO BS.ByteString
-sourceLogger = CCo.iterM (logByteString "Received data\n")
+sourceLogger :: String -> C.Conduit BS.ByteString IO BS.ByteString
+sourceLogger s = CCo.iterM (logByteString s)
 
-listen :: C.Producer IO BS.ByteString -> TC.TChan IRCC.IrcMessage -> IO ()
+ircMessageLogger :: C.Conduit (Either BS.ByteString I.Message) IO (Either BS.ByteString I.Message)
+ircMessageLogger = CCo.iterM logMessage
+
+listen :: C.Producer IO BS.ByteString -> TC.TChan I.Message -> IO ()
 listen source chan =
   source
-    C.=$= sourceLogger
+--    C.=$= sourceLogger "Received data\n"
 --    C.=$= sourcePreprocessor
-    C.=$= IRCC.ircDecoder
+--    C.=$= sourceLogger "Processed data\n"
+    C.=$= IRCC.ircDecoderMessage
+    C.=$= ircMessageLogger
     C.$$ ircEventHandler
 
-serverWelcome :: BS.ByteString -> IRCC.IrcMessage
-serverWelcome user =
-  IRCC.RawMsg $
-    foldr BS.append BS.empty
-      [ C8.pack "Welcome, "
-      , user
-      , C8.pack "!\n"
-      ]
 
 runListener :: Server -> CN.AppData -> IO ()
 runListener s a = do
@@ -124,7 +130,6 @@ runListener s a = do
     chan <- newUserChan
     tid <- runUserThread chan sink
     addUser s uuid chan tid
-    writeUserChan chan (serverWelcome (UUID.toASCIIBytes uuid))
     listen source chan
   where
     source = CN.appSource a
